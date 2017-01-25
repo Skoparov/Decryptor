@@ -1,4 +1,5 @@
 #include <iostream>
+#include <thread>
 
 #include "decrypt.hpp"
 
@@ -14,7 +15,8 @@ int main( int argc, char* argv[] )
 
     try
     {
-        std::string pass{ decrypt::decrypt_password( path, 8 ) };
+        unsigned int threads_num{ std::thread::hardware_concurrency() };
+        std::string pass{ decrypt::decrypt_password( path, threads_num > 1? threads_num - 1 : 1 ) };
         std::cout<< "Password: " << pass << std::endl;
     }
     catch( const std::exception& e )
