@@ -1,5 +1,4 @@
 #include <list>
-#include <array>
 #include <vector>
 #include <fstream>
 #include <string.h>
@@ -60,7 +59,7 @@ file_data read_file( const std::string& filename )
 
 // Tries to decrypt data with the given key
 std::string check( std::string& password, const file_data& fa_data )
-{   
+{
     unsigned char passw_hash[ MD5_DIGEST_LENGTH ];
     MD5( ( const unsigned char* )password.data(), password.length(), passw_hash );
 
@@ -114,7 +113,7 @@ struct Task
     std::future< std::string > result;
 };
 
-// Check if password was found, remove finished tasks from the list
+// Check if password has been found, remove finished tasks from the list
 std::string check_for_password( std::list< Task >& tasks )
 {
     std::string password;
@@ -143,44 +142,53 @@ std::string check_for_password( std::list< Task >& tasks )
 class password_generator
 {
 public:
-    password_generator()
+    password_generator( std::string& dict, size_t counters_num ) : m_dict( std::move( dict ) )
     {
-        //Generate lookup dictionary
-        for( int i{ 0 }; i < m_number_of_letters; ++i  )
+        if( m_dict.empty() )
         {
-          m_dict[i] = 97 + i; // lower case letter
-          m_dict[i + m_number_of_letters ] = 65 + i; // upper case letter
-
-          if( i < m_number_of_digits )
-          {
-              m_dict[ i + m_number_of_letters * 2 ] = 48 + i; // digit
-          }
+            throw std::invalid_argument{ "Dictionary should not be empty" };
         }
+
+        if( !counters_num )
+        {
+            throw std::invalid_argument{ "Number of counters should be positive" };
+        }
+
+        m_counters.resize( counters_num );
     }
 
     std::string next()
     {
+        if( empty() )
+        {
+            throw std::out_of_range{ "Generator depleted" };
+        }
+
         std::string curr_pass;
 
-        if( m_first_counter < m_dict.size() )
+        for( size_t counter_num{ 0 }; counter_num < m_counters.size(); ++counter_num )
         {
-            curr_pass = std::string{ m_dict[ m_first_counter ] } +
-                                     m_dict[ m_second_counter ] +
-                                     m_dict[ m_third_counter ];
+            curr_pass += m_dict[ m_counters[ counter_num ] ];
+        }
 
-            ++m_third_counter;
+        size_t curr_counter{ m_counters.size() - 1 };
 
-            if( m_third_counter == m_dict.size() )
+        while( true )
+        {
+            ++m_counters[ curr_counter ];
+
+            if( curr_counter + 1 < m_counters.size() &&
+                    m_counters[ curr_counter + 1 ] == m_dict.size() )
             {
-                m_third_counter = 0;
-                ++m_second_counter;
+                m_counters[ curr_counter + 1 ] = 0;
             }
 
-            if( m_second_counter == m_dict.size() )
+            if( curr_counter == 0 )
             {
-                m_second_counter = 0;
-                ++m_first_counter;
+                break;
             }
+
+            --curr_counter;
         }
 
         return curr_pass;
@@ -188,18 +196,36 @@ public:
 
     bool empty() const
     {
-        return m_first_counter == m_dict.size();
+        return m_counters[ 0 ] == m_dict.size();
     }
 
 private:
-    size_t m_first_counter{ 0 };
-    size_t m_second_counter{ 0 };
-    size_t m_third_counter{ 0 };
-
-    static constexpr int m_number_of_letters{ 26 };
-    static constexpr int m_number_of_digits{ 10 };
-    std::array< char, m_number_of_letters * 2 + m_number_of_digits > m_dict;
+    std::string m_dict;
+    std::vector< size_t > m_counters;
 };
+
+std::string generate_dict()
+{
+    static constexpr int number_of_letters{ 26 };
+    static constexpr int number_of_digits{ 10 };
+
+    std::string dict;
+    dict.resize( number_of_letters * 2 + number_of_digits );
+
+    //Generate lookup dictionary
+    for( int i{ 0 }; i < number_of_letters; ++i  )
+    {
+        dict[ i ] = 97 + i; // lower case letter
+        dict[ i + number_of_letters ] = 65 + i; // upper case letter
+
+        if( i < number_of_digits )
+        {
+            dict[ i + number_of_letters * 2 ] = 48 + i; // digit
+        }
+    }
+
+    return dict;
+}
 
 }// details
 
@@ -214,10 +240,13 @@ std::string decrypt_password( const std::string& file_path, size_t threads_num )
     concurrency::async async( threads_num );
     std::list< Task > tasks;
 
-    password_generator gen;
+    std::string dict{ generate_dict() };
+    size_t number_of_counters{ 3 }; // Uppercase + lowercase + digits
+
+    password_generator gen{ dict, number_of_counters };
 
     while( !gen.empty() )
-    {               
+    {
         async.wait_for_vacant_thread();
 
         std::string new_pass{ gen.next() };
@@ -231,7 +260,7 @@ std::string decrypt_password( const std::string& file_path, size_t threads_num )
         auto task_func = std::bind( &check, new_pass, std::ref( fa_data ) );
         tasks.emplace_back();
 
-        Task& curr_task{ tasks.back() };
+        Task& curr_task = tasks.back();
         curr_task.task = std::move( std::packaged_task< std::string() >{ task_func } );
         curr_task.result = std::move( async.run( curr_task.task ) );
     }
@@ -240,7 +269,7 @@ std::string decrypt_password( const std::string& file_path, size_t threads_num )
     for( auto& task : tasks )
     {
         task.result.get();
-    }  
+    }
 
     return password;
 }
